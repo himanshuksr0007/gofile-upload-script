@@ -1,18 +1,28 @@
 #!/bin/bash
 
-# Gofile.io Upload Script
-# Just a simple script to upload files to gofile.io
-# Works on most systems (hopefully)
+################################################################################
+# Gofile.io Upload Script with Enhanced Logging
+# 
+# Description: Upload files to Gofile.io via their API with support for
+#              authentication, custom folders, and regional server selection
+#              Works on Windows (Git Bash/WSL), macOS, and Linux
+# 
+# Usage: ./gofile_upload.sh [OPTIONS] <file_path>
+# 
+# Requirements: curl, jq
+# Supported Platforms: Windows (Git Bash/WSL), macOS, Linux
+################################################################################
 
-set -euo pipefail  # trust issues with bash
+set -euo pipefail
 
-
-# Figure out what OS we're running on
+#===============================================================================
+# Detect Operating System
+#===============================================================================
 detect_os() {
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
         echo "linux"
     elif [[ "$OSTYPE" == "darwin"* ]]; then
-        echo "macos"  
+        echo "macos"
     elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" || "$OSTYPE" == "cygwin" ]]; then
         echo "windows"
     elif grep -q "Microsoft" /proc/version 2>/dev/null; then
@@ -24,9 +34,10 @@ detect_os() {
 
 OS_TYPE=$(detect_os)
 
-# Colors - because why not make it pretty
+#===============================================================================
+# Color codes
+#===============================================================================
 if [[ "$OS_TYPE" == "windows" && -z "${TERM:-}" ]]; then
-    # Windows CMD doesn't like colors
     RED=''
     GREEN=''
     YELLOW=''
@@ -40,146 +51,111 @@ else
     NC='\033[0m'
 fi
 
-# Global vars
+#===============================================================================
+# Configuration
+#===============================================================================
 API_TOKEN=""
 FOLDER_ID=""
 FILE_PATH=""
-SERVER_REGION="auto"  # auto should work fine
+SERVER_REGION="auto"
+DEBUG_MODE="false"
 
+#===============================================================================
+# Functions
+#===============================================================================
 
-# Show help text
-show_help() {
-    cat << EOF
-${BLUE}Gofile.io Upload Script${NC}
+show_usage() {
+    cat << 'EOF'
+Gofile.io Upload Script
 
-${YELLOW}Usage:${NC}
+Usage:
     bash gofile_upload.sh [OPTIONS] <file_path>
-    
-${YELLOW}Platforms:${NC}
-    Linux, macOS, Windows (Git Bash/WSL)
 
-${YELLOW}Options:${NC}
-    -t, --token TOKEN       API token (optional)
-    -f, --folder FOLDER_ID  Folder to upload to (needs token)
-    -r, --region REGION     Server region (auto, eu, na, ap-sgp, ap-hkg, ap-tyo, sa)
-    -h, --help              Show this help
+Options:
+    -t, --token TOKEN       Your Gofile.io API token (optional for guest)
+    -f, --folder FOLDER_ID  Upload to specific folder (requires token)
+    -r, --region REGION     Server region: auto, eu, na, ap-sgp, ap-hkg, ap-tyo, sa
+    -d, --debug             Enable debug mode (verbose output)
+    -h, --help              Show this help message
 
-${YELLOW}Examples:${NC}
-    # Simple upload
+Examples:
     bash gofile_upload.sh myfile.pdf
-
-    # With token
-    bash gofile_upload.sh --token YOUR_TOKEN myfile.pdf
-
-    # To specific folder
-    bash gofile_upload.sh --token YOUR_TOKEN --folder FOLDER_ID myfile.pdf
-
-${YELLOW}Get API Token:${NC}
-    Go to https://gofile.io/myProfile and grab your token
-
-${YELLOW}Notes:${NC}
-    - Guest uploads work fine
-    - Folder upload needs a token
-    - First upload gives you a folder ID for later use
+    bash gofile_upload.sh --token TOKEN myfile.pdf
+    bash gofile_upload.sh -d myfile.pdf
 
 EOF
     exit 0
 }
 
-# Error and exit
-die() {
+error_exit() {
     echo -e "${RED}ERROR:${NC} $1" >&2
     exit 1
 }
 
-# Success message
-ok() {
+success_msg() {
     echo -e "${GREEN}✓${NC} $1"
 }
 
-# Info message  
-info() {
+info_msg() {
     echo -e "${BLUE}ℹ${NC} $1"
 }
 
-# Warning
-warn() {
+warn_msg() {
     echo -e "${YELLOW}⚠${NC} $1"
 }
 
-# Check if we have curl and jq
-check_deps() {
+debug_msg() {
+    if [[ "$DEBUG_MODE" == "true" ]]; then
+        echo -e "${YELLOW}[DEBUG]${NC} $1" >&2
+    fi
+}
+
+check_dependencies() {
     local missing=()
     
     if ! command -v curl &> /dev/null; then
         missing+=("curl")
     fi
-    
     if ! command -v jq &> /dev/null; then
         missing+=("jq")
     fi
     
     if [ ${#missing[@]} -gt 0 ]; then
-        case "$OS_TYPE" in
-            windows)
-                die "Missing: ${missing[*]}\n\nFor Windows:\n1. Install Git for Windows\n2. Get jq from https://stedolan.github.io/jq/download/\n3. Add to PATH\n\nOr just use WSL"
-                ;;
-            macos)
-                die "Missing: ${missing[*]}\n\nInstall with: brew install ${missing[*]}"
-                ;;
-            *)
-                die "Missing: ${missing[*]}\n\nInstall with your package manager"
-                ;;
-        esac
+        echo -e "${RED}ERROR: Missing:${NC} ${missing[*]}"
+        echo ""
+        if [[ "$OS_TYPE" == "wsl" || "$OS_TYPE" == "linux" ]]; then
+            echo "Install with:"
+            echo "  sudo apt update && sudo apt install -y ${missing[*]}"
+        elif [[ "$OS_TYPE" == "macos" ]]; then
+            echo "Install with Homebrew:"
+            echo "  brew install ${missing[*]}"
+        fi
+        echo ""
+        error_exit "Please install missing dependencies"
     fi
 }
 
-# Get the right upload server
-get_server() {
-    local region="$1"
-    
-    case "$region" in
-        auto)
-            echo "https://upload.gofile.io/uploadfile"
-            ;;
-        eu)
-            echo "https://upload-eu-par.gofile.io/uploadfile"
-            ;;
-        na)  
-            echo "https://upload-na-phx.gofile.io/uploadfile"
-            ;;
-        ap-sgp)
-            echo "https://upload-ap-sgp.gofile.io/uploadfile"
-            ;;
-        ap-hkg)
-            echo "https://upload-ap-hkg.gofile.io/uploadfile"
-            ;;
-        ap-tyo)
-            echo "https://upload-ap-tyo.gofile.io/uploadfile"
-            ;;
-        sa)
-            echo "https://upload-sa-sao.gofile.io/uploadfile"
-            ;;
-        *)
-            warn "Unknown region '$region', using auto"
-            echo "https://upload.gofile.io/uploadfile"
-            ;;
+get_upload_server() {
+    case "$1" in
+        auto)  echo "https://upload.gofile.io/uploadfile" ;;
+        eu)    echo "https://upload-eu-par.gofile.io/uploadfile" ;;
+        na)    echo "https://upload-na-phx.gofile.io/uploadfile" ;;
+        ap-sgp) echo "https://upload-ap-sgp.gofile.io/uploadfile" ;;
+        ap-hkg) echo "https://upload-ap-hkg.gofile.io/uploadfile" ;;
+        ap-tyo) echo "https://upload-ap-tyo.gofile.io/uploadfile" ;;
+        sa)    echo "https://upload-sa-sao.gofile.io/uploadfile" ;;
+        *)     warn_msg "Unknown region, using auto"; echo "https://upload.gofile.io/uploadfile" ;;
     esac
 }
 
-# Get file size - cross platform stuff
-file_size() {
-    local file="$1"
+get_file_size() {
     local size
-    
-    # Different stat commands for different OS
-    if [[ "$OS_TYPE" == "macos" || "$OS_TYPE" == "windows" ]]; then
-        size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null)
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        size=$(stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null)
     else
-        size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
+        size=$(stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null)
     fi
     
-    # Convert to MB if big enough
     local mb=$((size / 1024 / 1024))
     if [ $mb -gt 0 ]; then
         echo "${mb} MB"
@@ -188,8 +164,7 @@ file_size() {
     fi
 }
 
-# Parse command line args
-parse_args() {
+parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -t|--token)
@@ -204,11 +179,15 @@ parse_args() {
                 SERVER_REGION="$2"
                 shift 2
                 ;;
+            -d|--debug)
+                DEBUG_MODE="true"
+                shift
+                ;;
             -h|--help)
-                show_help
+                show_usage
                 ;;
             -*)
-                die "Unknown option: $1\nUse -h for help"
+                error_exit "Unknown option: $1"
                 ;;
             *)
                 FILE_PATH="$1"
@@ -218,133 +197,176 @@ parse_args() {
     done
 }
 
-# Fix Windows paths
-fix_path() {
-    local path="$1"
-    
-    # Windows uses backslashes, we need forward slashes
-    if [[ "$OS_TYPE" == "windows" || "$OS_TYPE" == "wsl" ]]; then
-        path=$(echo "$path" | sed 's/\\/\//g')
-    fi
-    
-    echo "$path"
-}
-
-# Check inputs make sense
 validate_inputs() {
     if [[ -z "$FILE_PATH" ]]; then
-        die "No file specified!\nUse -h for help"
+        error_exit "No file specified!"
     fi
     
-    FILE_PATH=$(fix_path "$FILE_PATH")
-    
-    # Basic file checks
     if [[ ! -f "$FILE_PATH" ]]; then
-        die "File not found: $FILE_PATH"
+        error_exit "File not found: $FILE_PATH"
     fi
     
     if [[ ! -r "$FILE_PATH" ]]; then
-        die "Can't read file: $FILE_PATH"
+        error_exit "File is not readable: $FILE_PATH"
     fi
     
-    # Folder needs token
     if [[ -n "$FOLDER_ID" && -z "$API_TOKEN" ]]; then
-        die "Folder upload needs API token (use --token)"
+        error_exit "Folder ID requires an API token (use --token)"
     fi
     
-    # Show file size - just for fun
-    local size=$(file_size "$FILE_PATH")
-    info "File size: $size"
+    local size
+    size=$(get_file_size "$FILE_PATH")
+    info_msg "File size: $size"
 }
 
-# Do the actual upload
-do_upload() {
-    local server=$(get_server "$SERVER_REGION")
-    local filename=$(basename "$FILE_PATH")
+upload_file() {
+    local upload_url
+    upload_url=$(get_upload_server "$SERVER_REGION")
     
-    info "Server: $server"
-    info "Uploading: $filename"
+    info_msg "Server: $upload_url"
+    info_msg "Uploading: $(basename "$FILE_PATH")"
     
-    # Build curl command
-    local cmd=("curl" "-#" "-F" "file=@$FILE_PATH")
+    # Create temporary files for stderr and stdout
+    local tmp_stderr tmp_stdout
+    tmp_stderr=$(mktemp)
+    tmp_stdout=$(mktemp)
     
-    # Add auth if we have it
+    trap "rm -f $tmp_stderr $tmp_stdout" EXIT
+    
+    local curl_args=("-s" "-w" "\n%{http_code}")
+    
+    # In debug mode, write verbose output to temp file (not mixed with response)
+    if [[ "$DEBUG_MODE" == "true" ]]; then
+        info_msg "Debug mode ENABLED - verbose curl output to follow"
+        curl_args+=("-v")
+    fi
+    
+    curl_args+=("-F" "file=@$FILE_PATH")
+    
     if [[ -n "$API_TOKEN" ]]; then
-        cmd+=("-H" "Authorization: Bearer $API_TOKEN")
-        info "Using authentication"
+        curl_args+=("-H" "Authorization: Bearer $API_TOKEN")
+        info_msg "Authenticated upload"
     else
-        info "Guest upload"
+        info_msg "Guest upload"
     fi
     
-    # Add folder if specified
     if [[ -n "$FOLDER_ID" ]]; then
-        cmd+=("-F" "folderId=$FOLDER_ID")
-        info "Target folder: $FOLDER_ID"
+        curl_args+=("-F" "folderId=$FOLDER_ID")
+        debug_msg "Folder ID: $FOLDER_ID"
     fi
     
-    cmd+=("$server")
+    curl_args+=("$upload_url")
     
-    # Upload and get response
+    debug_msg "Curl command: curl ${curl_args[*]}"
+    echo ""
+    
+    # Execute upload - separate stderr and stdout
+    if [[ "$DEBUG_MODE" == "true" ]]; then
+        curl "${curl_args[@]}" 2>"$tmp_stderr" >"$tmp_stdout"
+        # Show verbose output
+        cat "$tmp_stderr" >&2
+        echo ""
+    else
+        curl "${curl_args[@]}" >"$tmp_stdout" 2>"$tmp_stderr"
+    fi
+    
+    # Read response
     local response
-    if ! response=$("${cmd[@]}" 2>&1); then
-        die "Upload failed - check your connection"
+    response=$(cat "$tmp_stdout")
+    
+    debug_msg "Raw stdout response: $response"
+    
+    # Extract HTTP code (last line)
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+    
+    # Remove HTTP code line from response
+    response=$(echo "$response" | head -n-1)
+    
+    debug_msg "HTTP Status Code: $http_code"
+    debug_msg "Response body: $response"
+    
+    # Validate HTTP code
+    if ! [[ "$http_code" =~ ^[0-9]{3}$ ]]; then
+        error_exit "Failed to get valid HTTP response code: '$http_code'\n\nResponse:\n$response"
     fi
     
-    # Parse JSON response
-    local status=$(echo "$response" | jq -r '.status' 2>/dev/null || echo "error")
+    if [[ "$http_code" != "200" ]]; then
+        error_exit "Server returned HTTP $http_code\n\nResponse:\n$response"
+    fi
+    
+    # Validate JSON
+    if ! echo "$response" | jq empty 2>/dev/null; then
+        error_exit "Invalid JSON response from server:\n$response\n\nPlease check your connection or try again"
+    fi
+    
+    # Check API status
+    local status
+    status=$(echo "$response" | jq -r '.status // "error"' 2>/dev/null)
+    
+    debug_msg "API Status: $status"
     
     if [[ "$status" != "ok" ]]; then
-        local err=$(echo "$response" | jq -r '.status' 2>/dev/null || echo "Unknown error")
-        die "Upload failed: $err"
+        local api_error
+        api_error=$(echo "$response" | jq -r '.error // .status // "Unknown error"' 2>/dev/null)
+        debug_msg "Full response: $response"
+        error_exit "API Error: $api_error\n\nFull response:\n$response"
     fi
     
-    # Get the good stuff from response
-    local page=$(echo "$response" | jq -r '.data.downloadPage // empty')
-    local fid=$(echo "$response" | jq -r '.data.fileId // empty')  
-    local folder=$(echo "$response" | jq -r '.data.parentFolder // empty')
-    local name=$(echo "$response" | jq -r '.data.fileName // empty')
-    local hash=$(echo "$response" | jq -r '.data.md5 // empty')
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S %Z')
+    # Extract data
+    local download_page file_id parent_folder file_name md5 upload_time
     
-    # Show results
+    download_page=$(echo "$response" | jq -r '.data.downloadPage // empty' 2>/dev/null)
+    file_id=$(echo "$response" | jq -r '.data.fileId // empty' 2>/dev/null)
+    parent_folder=$(echo "$response" | jq -r '.data.parentFolder // empty' 2>/dev/null)
+    file_name=$(echo "$response" | jq -r '.data.fileName // empty' 2>/dev/null)
+    md5=$(echo "$response" | jq -r '.data.md5 // empty' 2>/dev/null)
+    upload_time=$(date '+%Y-%m-%d %H:%M:%S %Z')
+    
+    debug_msg "Extraction successful - Download: $download_page"
+    
+    # Display results
     echo ""
-    echo "════════════════════════════════════════════════════════"
-    ok "Upload done!"
-    echo "════════════════════════════════════════════════════════"
+    echo "═══════════════════════════════════════════════════════════════"
+    success_msg "Upload completed successfully!"
+    echo "═══════════════════════════════════════════════════════════════"
     echo ""
     
-    [[ -n "$page" ]] && echo -e "${GREEN}Download:${NC} $page"
-    [[ -n "$name" ]] && echo -e "${BLUE}Filename:${NC} $name"  
-    [[ -n "$fid" ]] && echo -e "${BLUE}File ID:${NC}  $fid"
+    [[ -n "$download_page" ]] && echo -e "${GREEN}Download Page:${NC} $download_page"
+    [[ -n "$file_name" ]] && echo -e "${BLUE}File Name:${NC}     $file_name"
+    [[ -n "$file_id" ]] && echo -e "${BLUE}File ID:${NC}       $file_id"
     
-    if [[ -n "$folder" ]]; then
-        echo -e "${BLUE}Folder:${NC}   $folder"
+    if [[ -n "$parent_folder" ]]; then
+        echo -e "${BLUE}Folder ID:${NC}     $parent_folder"
         echo ""
-        info "Save this folder ID for future uploads: --folder $folder"
+        info_msg "Use this for future uploads: --folder $parent_folder"
     fi
     
-    [[ -n "$hash" ]] && echo -e "${BLUE}MD5:${NC}      $hash"
-    echo -e "${BLUE}Time:${NC}     $timestamp"
+    [[ -n "$md5" ]] && echo -e "${BLUE}MD5 Hash:${NC}      $md5"
+    echo -e "${BLUE}Upload Time:${NC}    $upload_time"
     echo ""
 }
 
+#===============================================================================
+# Main
+#===============================================================================
 
-# Main function
 main() {
-    # Show what we detected
     case "$OS_TYPE" in
-        linux)   info "Detected: Linux" ;;
-        macos)   info "Detected: macOS" ;;  
-        windows) info "Detected: Windows" ;;
-        wsl)     info "Detected: WSL" ;;
-        *)       warn "Unknown OS, hoping for the best" ;;
+        linux) info_msg "Detected: Linux" ;;
+        macos) info_msg "Detected: macOS" ;;
+        windows) info_msg "Detected: Windows" ;;
+        wsl) info_msg "Detected: WSL" ;;
+        *) warn_msg "Unknown OS" ;;
     esac
     
-    check_deps
-    parse_args "$@"
-    validate_inputs  
-    do_upload
+    check_dependencies
+    parse_arguments "$@"
+    
+    [[ "$DEBUG_MODE" == "true" ]] && info_msg "Debug mode ENABLED"
+    
+    validate_inputs
+    upload_file
 }
 
-# Let's go!
 main "$@"
