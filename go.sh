@@ -1,18 +1,5 @@
 #!/bin/bash
 
-################################################################################
-# Gofile.io Upload Script with Enhanced Logging
-# 
-# Description: Upload files to Gofile.io via their API with support for
-#              authentication, custom folders, and regional server selection
-#              Works on Windows (Git Bash/WSL), macOS, and Linux
-# 
-# Usage: ./gofile_upload.sh [OPTIONS] <file_path>
-# 
-# Requirements: curl, jq
-# Supported Platforms: Windows (Git Bash/WSL), macOS, Linux
-################################################################################
-
 set -euo pipefail
 
 #===============================================================================
@@ -218,8 +205,25 @@ validate_inputs() {
     size=$(get_file_size "$FILE_PATH")
     info_msg "File size: $size"
 }
+    copy_to_clipboard() {
+    local text="$1"
+    [[ -z "$text" ]] && return
 
+    case "$OS_TYPE" in
+        macos) echo -n "$text" | pbcopy ;;
+        windows|wsl) echo -n "$text" | clip.exe ;;
+        linux)
+            if command -v xclip &>/dev/null; then
+                echo -n "$text" | xclip -selection clipboard
+            elif command -v wl-copy &>/dev/null; then
+                echo -n "$text" | wl-copy
+            fi
+            ;;
+    esac
+    info_msg "Link copied to clipboard!"
+}
 upload_file() {
+
     local upload_url
     upload_url=$(get_upload_server "$SERVER_REGION")
     
@@ -233,12 +237,20 @@ upload_file() {
     
     trap "rm -f $tmp_stderr $tmp_stdout" EXIT
     
-    local curl_args=("-s" "-w" "\n%{http_code}")
+    local curl_args=("-w" "\n%{http_code}")
+
+    curl_args+=(
+        "--connect-timeout" "10"
+        "--retry" "3"
+        "--retry-delay" "2"
+    )
     
-    # In debug mode, write verbose output to temp file (not mixed with response)
     if [[ "$DEBUG_MODE" == "true" ]]; then
         info_msg "Debug mode ENABLED - verbose curl output to follow"
+        curl_args+=("-s")
         curl_args+=("-v")
+    else
+        curl_args+=("-#") 
     fi
     
     curl_args+=("-F" "file=@$FILE_PATH")
@@ -260,14 +272,15 @@ upload_file() {
     debug_msg "Curl command: curl ${curl_args[*]}"
     echo ""
     
-    # Execute upload - separate stderr and stdout
     if [[ "$DEBUG_MODE" == "true" ]]; then
+
         curl "${curl_args[@]}" 2>"$tmp_stderr" >"$tmp_stdout"
-        # Show verbose output
+
         cat "$tmp_stderr" >&2
         echo ""
     else
-        curl "${curl_args[@]}" >"$tmp_stdout" 2>"$tmp_stderr"
+
+        curl "${curl_args[@]}" >"$tmp_stdout"
     fi
     
     # Read response
@@ -343,8 +356,11 @@ upload_file() {
     fi
     
     [[ -n "$md5" ]] && echo -e "${BLUE}MD5 Hash:${NC}      $md5"
-    echo -e "${BLUE}Upload Time:${NC}    $upload_time"
+    echo -e "${BLUE}Upload Time:${NC}   $upload_time"
     echo ""
+
+  
+    copy_to_clipboard "$download_page"
 }
 
 #===============================================================================
