@@ -205,7 +205,7 @@ validate_inputs() {
     size=$(get_file_size "$FILE_PATH")
     info_msg "File size: $size"
 }
-    copy_to_clipboard() {
+copy_to_clipboard() {
     local text="$1"
     [[ -z "$text" ]] && return
 
@@ -213,10 +213,12 @@ validate_inputs() {
         macos) echo -n "$text" | pbcopy ;;
         windows|wsl) echo -n "$text" | clip.exe ;;
         linux)
-            if command -v xclip &>/dev/null; then
-                echo -n "$text" | xclip -selection clipboard
-            elif command -v wl-copy &>/dev/null; then
+            if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-copy &>/dev/null; then
                 echo -n "$text" | wl-copy
+            elif [[ -n "${DISPLAY:-}" ]] && command -v xclip &>/dev/null; then
+                echo -n "$text" | xclip -selection clipboard
+            else
+                return  # No display available, skip silently
             fi
             ;;
     esac
